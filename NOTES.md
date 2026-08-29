@@ -466,3 +466,34 @@ HTTP concerns are ~120 lines of plain Express middleware.
 On this box `wsl <cmd>` hangs for ~10–30 s at a time (Docker Desktop resource
 churn) then recovers. `\\wsl$\...` file IO is unaffected. Automation must retry
 the invocation, not just the inner command.
+
+## Milestone 6 — email-allowlist credential issuance (branch `feat/email-credentials`)
+
+Replaces "credentials are guessable `citizen-N` strings" with per-person random
+secrets gated by an operator-maintained email allowlist. No contract change.
+
+- `server/credentials.ts` — three gitignored stores: `.allowlist.json`
+  (emails, seeded from `QUORUM_ALLOWLIST`, then operator-editable), `.magic.json`
+  (sha256-hashed single-use claim tokens, `QUORUM_MAGIC_TTL_MS` default 30 min),
+  `.issued.json` (`{email, issuedAt}` only — deliberately no email→leaf link).
+  `timingSafeEqual` on the token hash; anti-enumeration in the endpoint.
+- `server/mailer.ts` — `sendMagicLink`; lazy `import('nodemailer')` when
+  `QUORUM_SMTP_URL` set, else logs the link to the API console. `nodemailer` is
+  NOT in package.json — `npm i nodemailer` when going to real SMTP (keeps CI /
+  the dev path dependency-free).
+- `server/index.ts` — `POST /api/request-credential` (5/h/IP, always the same
+  "check your inbox"), `POST /api/claim-credential` (burns token → `issueAndEnrol`:
+  `registerIdentity` a `randomBytes(32)` secret, wait for the indexer, `enroll`
+  the chosen reporter key — two proofs, ~60–90 s). `/api/state` gains an
+  `issuance` block. Seeded pool still works alongside; set `QUORUM_IDENTITY_POOL=`
+  empty to run email-only.
+- UI — `ClaimCredential.tsx` for the `/?claim=<token>` landing (query param, not
+  a route — survives any static host); `ClaimSlot.tsx` shows an email-request
+  form when the pool is empty/spent; `App.tsx` branches on `?claim=`.
+- Docs: `.env.example`, `README.md` "Credential issuance", `SECURITY.md`.
+
+### Not verified end-to-end
+Built without a running devnet (WSL flaky, no proof server up). Test locally:
+`npm run quorum:api` with `QUORUM_IDENTITY_POOL=` and `QUORUM_ALLOWLIST=you@x.com`,
+`POST /api/request-credential {email}`, copy the `[mailer:dev]` link from the API
+log, open it, enrol a key, file. Then merge.

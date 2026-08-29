@@ -3,7 +3,18 @@ import './App.css'
 import { FileReport } from './components/FileReport'
 import { EscrowBoard } from './components/EscrowBoard'
 import { ClaimSlot } from './components/ClaimSlot'
+import { ClaimCredential } from './components/ClaimCredential'
 import { getHealth, getState, type Health, type State } from './lib/api'
+
+const CLAIM_TOKEN =
+  typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('claim') : null
+
+function clearClaimParam() {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  url.searchParams.delete('claim')
+  window.history.replaceState({}, '', url.pathname + url.search)
+}
 
 const BOOT_LABEL: Record<string, string> = {
   starting: 'starting API…',
@@ -127,11 +138,22 @@ export default function App() {
       ) : (
         <main className="grid">
           <div className="left">
-            <ClaimSlot
-              identities={state?.identities ?? []}
-              members={state?.members ?? []}
-              onClaimed={refresh}
-            />
+            {CLAIM_TOKEN ? (
+              <ClaimCredential
+                token={CLAIM_TOKEN}
+                onClaimed={() => {
+                  clearClaimParam()
+                  refresh()
+                }}
+              />
+            ) : (
+              <ClaimSlot
+                identities={state?.identities ?? []}
+                members={state?.members ?? []}
+                issuance={state?.issuance}
+                onClaimed={refresh}
+              />
+            )}
             <FileReport
               threshold={threshold}
               members={state?.members ?? []}

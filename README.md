@@ -79,19 +79,36 @@ Configuration is via environment variables — see [`.env.example`](./.env.examp
 `NODE_ENV=production` makes [`server/config.ts`](./server/config.ts) fail closed
 (no built-in secrets, no `*` CORS, bearer token required).
 
+## Credential issuance
+
+Two ways a reporter key gets enrolled:
+
+- **Seeded pool** (dev/demo) — `QUORUM_IDENTITY_POOL=citizen-1,citizen-2,citizen-3`.
+  The issuer registers these on boot; anyone can spend one. Set the var empty to
+  disable.
+- **Email allowlist** — the issuer verifies people out of band and lists their
+  emails (`QUORUM_ALLOWLIST=…`, or `server/.allowlist.json`). A person requests a
+  credential (`/api/request-credential`), gets a single-use claim link
+  (`<ui>/?claim=<token>`; printed to the API console until `QUORUM_SMTP_URL` +
+  `npm i nodemailer`), picks a reporter key, and the server mints a random
+  32-byte credential and spends it to enrol — one per email, ever. The server
+  keeps no email → reporter-key link. `/api/request-credential` returns the same
+  response whether or not the address is on the list.
+
 ## Production checklist
 
 Done: fail-closed config, per-IP rate limiting, security headers, input/size
-caps, atomic store writes, CI (typecheck + UI lint/build).
+caps, atomic store writes, CI (typecheck + UI lint/build), email-allowlist
+credential issuance (random per-person secrets, single-use claim links).
 
 Still needed:
 
-- [ ] Real per-person credential issuance (replace the seeded `citizen-*` pool + shared issuer secret)
-- [ ] A real signing wallet (Lace) instead of the devnet genesis seed
+- [ ] Real signing wallet (Lace) instead of the devnet genesis seed
 - [ ] Deployment to a funded network (`preview` / `preprod`)
 - [ ] A database instead of `server/*.json` flat files
 - [ ] Capability tokens for the escrow nodes' `/store`
 - [ ] Full e2e in CI against an ephemeral devnet
+- [ ] Rotate/scope the issuer secret; move it out of the app process
 
 ## Repo layout
 

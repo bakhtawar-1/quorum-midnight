@@ -69,5 +69,10 @@ server/.members.json
 server/.reports.json
 server/.escrow-*.json
 
+# Credential issuance stores (allowlist of emails, claim tokens, issued records)
+server/.allowlist.json
+server/.magic.json
+server/.issued.json
+
 # Local probe/scratch
 .q-probe.sh

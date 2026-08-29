@@ -43,6 +43,13 @@ export interface Bucket {
   reports: BucketReport[]
 }
 
+export interface Issuance {
+  emailEnabled: boolean
+  poolEnabled: boolean
+  allowlistCount: number
+  issuedCount: number
+}
+
 export interface State {
   contractAddress: string
   threshold: number
@@ -54,6 +61,7 @@ export interface State {
   identities: Identity[]
   members: { key: string; credentialId: string; enrolledAt: string }[]
   escrow: Escrow
+  issuance?: Issuance
   buckets: Bucket[]
 }
 
@@ -167,6 +175,20 @@ export const claimSlot = (input: { credentialId: string; reporterKey: string }) 
   req<{ ok: true; key: string; credentialId: string; memberCount: number }>('/api/enroll', {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+
+/** email-allowlist issuance: ask for a claim link (always returns the same message) */
+export const requestCredential = (email: string) =>
+  req<{ ok: true; message: string }>('/api/request-credential', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+
+/** redeem a claim link's token and enrol a reporter key in one step */
+export const claimCredential = (token: string, reporterKey: string) =>
+  req<{ ok: true; key: string; memberCount: number }>('/api/claim-credential', {
+    method: 'POST',
+    body: JSON.stringify({ token, reporterKey }),
   })
 
 export const reveal = (bucketKeyHex: string) =>

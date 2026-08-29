@@ -22,7 +22,7 @@
  * that trust with Shamir secret-sharing.
  */
 import express from 'express';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -42,6 +42,18 @@ import { resolveNetwork, getOrCreateWallet } from '../src/network';
 import { createWallet, persistWalletState, unshieldedToken } from '../src/wallet';
 import { config } from './config';
 import { cors, securityHeaders, rateLimit, requireToken, writeJsonAtomic, isBase64 } from './http';
+import { sendMagicLink } from './mailer';
+import {
+  loadAllowlist,
+  isAllowed,
+  hasCredential,
+  createMagic,
+  consumeMagic,
+  normalizeEmail,
+  recordIssued,
+  allowlistCount,
+  issuedCount,
+} from './credentials';
 
 // @ts-expect-error wallet sync needs a global WebSocket
 globalThis.WebSocket = WebSocket;
@@ -338,14 +350,55 @@ async function bootstrap(): Promise<void> {
 
   boot = { phase: 'registering-identities' };
   await ensureIdentityPool();
+  loadAllowlist();
 
   if (SPAWN_ESCROW) startEscrowNodes();
 
   boot = { phase: 'ready' };
   const members = readJson<StoredMember[]>(MEMBERS_FILE, []);
   console.log(
-    `[quorum-api] ready · contract ${contractAddress} · threshold ${THRESHOLD} · identities ${IDENTITY_POOL.length} · members ${members.length} · escrow ${ESCROW_THRESHOLD}-of-${ESCROW_COUNT}`,
+    `[quorum-api] ready · contract ${contractAddress} · threshold ${THRESHOLD} · pool ${IDENTITY_POOL.length} · allowlist ${allowlistCount()} · issued ${issuedCount()} · members ${members.length} · escrow ${ESCROW_THRESHOLD}-of-${ESCROW_COUNT}`,
   );
+}
+
+/**
+ * Issue a fresh identity credential for `registrantSecret` (issuer circuit) and
+ * immediately spend it to enrol `reporterKey` (enroll circuit). Used by the
+ * email-allowlist claim flow — the caller never handles the raw secret.
+ */
+async function issueAndEnrol(registrantSecret: Uint8Array, reporterKey: string): Promise<void> {
+  await serialize(async () => {
+    current = { ...current, issuerSecret: ISSUER_SECRET, registrantSecret };
+    await withDustRetry(() => deployed.callTx.registerIdentity());
+  });
+
+  let idPath: MerklePath | undefined;
+  for (let i = 0; i < 20; i++) {
+    const l = await readLedger();
+    idPath = l.identityList.findPathForLeaf(idLeafOf(registrantSecret)) as MerklePath | undefined;
+    if (idPath) break;
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  if (!idPath) throw new Error('the new identity credential did not appear on chain in time — retry the claim');
+
+  await serialize(async () => {
+    current = {
+      ...current,
+      personSecret: registrantSecret,
+      identityPath: idPath as MerklePath,
+      newReporterSecret: reporterSecretOf(reporterKey),
+    };
+    await withDustRetry(() => deployed.callTx.enroll());
+  });
+
+  const members = readJson<StoredMember[]>(MEMBERS_FILE, []);
+  members.push({
+    key: reporterKey,
+    credentialId: 'email',
+    leafHex: hex(memberLeafOf(reporterKey)),
+    enrolledAt: new Date().toISOString(),
+  });
+  writeJson(MEMBERS_FILE, members);
 }
 
 function startEscrowNodes(): void {
@@ -449,6 +502,12 @@ app.get('/api/state', async (_req, res) => {
       memberCount: Number(l.memberList.firstFree()),
       members: members.map((m) => ({ key: m.key, credentialId: m.credentialId, enrolledAt: m.enrolledAt })),
       escrow: { threshold: ESCROW_THRESHOLD, count: ESCROW_COUNT, nodes: escrowNodes },
+      issuance: {
+        emailEnabled: true,
+        poolEnabled: IDENTITY_POOL.length > 0,
+        allowlistCount: allowlistCount(),
+        issuedCount: issuedCount(),
+      },
       buckets,
     });
   } catch (err: any) {
@@ -501,6 +560,64 @@ app.post('/api/enroll', mutating, async (req, res) => {
       return res.status(409).json({ error: 'CREDENTIAL_USED', message: `Credential "${credentialId}" was already used.` });
     }
     res.status(500).json({ error: 'ENROLL_FAILED', message: err?.message ?? String(err) });
+  }
+});
+
+// ── email-allowlist credential issuance ──────────────────────────────────────
+
+// Tighter limit on the email path: 5 requests / hour / IP.
+const emailLimiter = rateLimit({ windowMs: 60 * 60_000, max: 5 });
+
+app.post('/api/request-credential', emailLimiter, async (req, res) => {
+  if (boot.phase !== 'ready') return res.status(503).json({ error: 'BOOTING', boot });
+  const email = normalizeEmail((req.body ?? {}).email);
+  if (!email) return res.status(400).json({ error: 'BAD_INPUT', message: 'A valid email address is required.' });
+  // Same answer whether or not the address is eligible — no allowlist enumeration.
+  const generic = { ok: true, message: 'If that address is eligible, a claim link is on its way.' };
+  try {
+    if (isAllowed(email) && !hasCredential(email)) {
+      const token = createMagic(email);
+      const link = `${config.email.uiBaseUrl.replace(/\/+$/, '')}/?claim=${encodeURIComponent(token)}`;
+      await sendMagicLink(email, link);
+    }
+    res.json(generic);
+  } catch (err: any) {
+    res.status(500).json({ error: 'REQUEST_FAILED', message: err?.message ?? String(err) });
+  }
+});
+
+app.post('/api/claim-credential', mutating, async (req, res) => {
+  if (boot.phase !== 'ready') return res.status(503).json({ error: 'BOOTING', boot });
+  const { token, reporterKey } = req.body ?? {};
+  if (typeof reporterKey !== 'string' || !reporterKey.trim() || reporterKey.length > 128) {
+    return res.status(400).json({ error: 'BAD_INPUT', message: 'reporterKey is required (max 128 chars).' });
+  }
+  const key = reporterKey.trim();
+
+  const consumed = consumeMagic(token);
+  if (!consumed.ok) {
+    const message = {
+      INVALID: 'This claim link is not valid.',
+      EXPIRED: 'This claim link has expired — request a new one.',
+      USED: 'This claim link has already been used.',
+    }[consumed.reason];
+    return res.status(410).json({ error: `LINK_${consumed.reason}`, message });
+  }
+
+  if (hasCredential(consumed.email)) {
+    return res.status(409).json({ error: 'ALREADY_ISSUED', message: 'A credential was already issued for this address.' });
+  }
+  if (readJson<StoredMember[]>(MEMBERS_FILE, []).some((m) => m.key === key)) {
+    return res.status(409).json({ error: 'KEY_TAKEN', message: `Reporter key "${key}" is already enrolled.` });
+  }
+
+  try {
+    await issueAndEnrol(randomBytes(32), key);
+    recordIssued(consumed.email);
+    const memberCount = readJson<StoredMember[]>(MEMBERS_FILE, []).length;
+    res.json({ ok: true, key, memberCount });
+  } catch (err: any) {
+    res.status(500).json({ error: 'CLAIM_FAILED', message: err?.message ?? String(err) });
   }
 });
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ApiError, claimSlot, type Identity } from '../lib/api'
+import { ApiError, claimSlot, requestCredential, type Identity, type Issuance } from '../lib/api'
 
 type Phase =
   | { k: 'idle' }
@@ -10,10 +10,12 @@ type Phase =
 export function ClaimSlot({
   identities,
   members,
+  issuance,
   onClaimed,
 }: {
   identities: Identity[]
   members: { key: string; credentialId: string }[]
+  issuance?: Issuance
   onClaimed: () => void
 }) {
   const [picked, setPicked] = useState<string | null>(null)
@@ -23,6 +25,8 @@ export function ClaimSlot({
 
   const available = identities.filter((i) => !i.used)
   const canClaim = !!picked && !!key.trim() && !busy
+  const poolShown = identities.length > 0
+  const emailShown = issuance?.emailEnabled && (!poolShown || available.length === 0)
 
   const claim = async () => {
     if (!picked) return
@@ -45,56 +49,74 @@ export function ClaimSlot({
     <div className="card claim">
       <h2>
         <span className="stepno">1</span> Claim a reporter slot{' '}
-        <span className="pill">
-          {available.length}/{identities.length} free
-        </span>
+        {poolShown && (
+          <span className="pill">
+            {available.length}/{identities.length} free
+          </span>
+        )}
       </h2>
       <p className="lede">
         Each reporter slot is backed by a one-time <strong>identity credential</strong> that an issuer
-        registered on chain. Spending one enrols a reporter key; the contract&rsquo;s enroll-nullifier makes
+        registers on chain. Spending one enrols a reporter key; the contract&rsquo;s enroll-nullifier makes
         sure a credential can never be spent twice. <em>This is what stops one person minting many reporters.</em>
       </p>
 
-      <div className="creds">
-        {identities.map((i) => {
-          const owner = members.find((m) => m.credentialId === i.id)
-          return (
-            <button
-              key={i.id}
-              className={`cred ${i.used ? 'used' : ''} ${picked === i.id ? 'picked' : ''}`}
-              disabled={i.used || busy}
-              onClick={() => setPicked(i.id)}
-            >
-              <span className="cred-id">{i.id}</span>
-              <span className="cred-state">
-                {i.used ? (owner ? `→ ${owner.key}` : 'spent') : 'available'}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-
-      {available.length > 0 && (
+      {poolShown && (
         <>
-          <label className="claim-key">
-            <span>Reporter key to enrol {picked ? <em>with “{picked}”</em> : ''}</span>
-            <input
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder="a passphrase you'll use to file (e.g. alice-1)"
-              disabled={busy}
-              autoComplete="off"
-              spellCheck={false}
-              onKeyDown={(e) => e.key === 'Enter' && canClaim && claim()}
-            />
-          </label>
-          <button className="primary" disabled={!canClaim} onClick={claim}>
-            {busy ? 'Enrolling…' : picked ? `Spend “${picked}” → enrol “${key.trim() || '…'}”` : 'Pick a credential above'}
-          </button>
+          <div className="creds">
+            {identities.map((i) => {
+              const owner = members.find((m) => m.credentialId === i.id)
+              return (
+                <button
+                  key={i.id}
+                  className={`cred ${i.used ? 'used' : ''} ${picked === i.id ? 'picked' : ''}`}
+                  disabled={i.used || busy}
+                  onClick={() => setPicked(i.id)}
+                >
+                  <span className="cred-id">{i.id}</span>
+                  <span className="cred-state">
+                    {i.used ? (owner ? `→ ${owner.key}` : 'spent') : 'available'}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {available.length > 0 && (
+            <>
+              <label className="claim-key">
+                <span>Reporter key to enrol {picked ? <em>with “{picked}”</em> : ''}</span>
+                <input
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  placeholder="a passphrase you'll use to file (e.g. alice-1)"
+                  disabled={busy}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onKeyDown={(e) => e.key === 'Enter' && canClaim && claim()}
+                />
+              </label>
+              <button className="primary" disabled={!canClaim} onClick={claim}>
+                {busy
+                  ? 'Enrolling…'
+                  : picked
+                    ? `Spend “${picked}” → enrol “${key.trim() || '…'}”`
+                    : 'Pick a credential above'}
+              </button>
+            </>
+          )}
         </>
       )}
-      {available.length === 0 && identities.length > 0 && (
-        <p className="hint">Every credential in the pool is spent. Restart the API with a bigger <code>QUORUM_IDENTITY_POOL</code> for more.</p>
+
+      {emailShown && (
+        <EmailRequest sole={!poolShown} allowlistCount={issuance?.allowlistCount ?? 0} />
+      )}
+
+      {!poolShown && !emailShown && (
+        <p className="hint">
+          No credential pool and no email issuance is configured on this server. Set{' '}
+          <code>QUORUM_IDENTITY_POOL</code> or <code>QUORUM_ALLOWLIST</code>.
+        </p>
       )}
 
       {busy && (
@@ -114,6 +136,56 @@ export function ClaimSlot({
       {phase.k === 'error' && (
         <div className="result bad">
           <strong>Couldn’t enrol.</strong> {phase.message}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Email-allowlist path: request a claim link. Always reports the same outcome. */
+function EmailRequest({ sole, allowlistCount }: { sole: boolean; allowlistCount: number }) {
+  const [email, setEmail] = useState('')
+  const [state, setState] = useState<{ k: 'idle' | 'working' | 'sent' | 'error'; msg?: string }>({ k: 'idle' })
+  const busy = state.k === 'working'
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+
+  const send = async () => {
+    if (!valid) return
+    setState({ k: 'working' })
+    try {
+      const r = await requestCredential(email.trim())
+      setState({ k: 'sent', msg: r.message })
+    } catch (err) {
+      setState({
+        k: 'error',
+        msg: err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  return (
+    <div className="email-req">
+      {!sole && <p className="hint">Every pooled credential is spent — request one by email instead:</p>}
+      <label className="claim-key">
+        <span>Your email {allowlistCount > 0 && <em>({allowlistCount} on the allowlist)</em>}</span>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@example.org"
+          disabled={busy || state.k === 'sent'}
+          autoComplete="email"
+          spellCheck={false}
+          onKeyDown={(e) => e.key === 'Enter' && valid && send()}
+        />
+      </label>
+      <button className="primary" disabled={!valid || busy || state.k === 'sent'} onClick={send}>
+        {busy ? 'Sending…' : 'Email me a claim link'}
+      </button>
+      {state.k === 'sent' && <div className="result good">{state.msg}</div>}
+      {state.k === 'error' && (
+        <div className="result bad">
+          <strong>Couldn’t send.</strong> {state.msg}
         </div>
       )}
     </div>
