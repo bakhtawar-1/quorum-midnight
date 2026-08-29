@@ -39,8 +39,9 @@ function numberEnv(name: string, fallback: number): number {
 }
 
 function listEnv(name: string, fallback: string[]): string[] {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
+  // distinguish "unset" (use fallback) from "set but empty" (an intentional empty list)
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
   return raw.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
