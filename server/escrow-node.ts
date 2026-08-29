@@ -15,7 +15,6 @@
  *   GET  /health
  */
 import express from 'express';
-import cors from 'cors';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,6 +22,8 @@ import { WebSocket } from 'ws';
 
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { resolveNetwork } from '../src/network';
+import { config } from './config';
+import { cors, securityHeaders, rateLimit, writeJsonAtomic } from './http';
 
 // @ts-expect-error the indexer client wants a global WebSocket
 globalThis.WebSocket = WebSocket;
@@ -47,7 +48,7 @@ const load = (): Store => {
     return {};
   }
 };
-const save = (s: Store) => fs.writeFileSync(STORE_FILE, JSON.stringify(s, null, 2));
+const save = (s: Store) => writeJsonAtomic(STORE_FILE, s);
 
 function contractAddress(): string | null {
   try {
@@ -73,14 +74,25 @@ async function bucketUnlocked(bucketKeyHex: string): Promise<{ unlocked: boolean
 }
 
 const app = express();
-app.use(cors());
+app.disable('x-powered-by');
+app.set('trust proxy', config.isProd ? 1 : false);
+app.use(securityHeaders);
+app.use(cors(config.cors.origins));
+app.use(rateLimit(config.rateLimit));
 app.use(express.json({ limit: '64kb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true, index: INDEX, port: PORT, held: Object.keys(load()).length }));
 
+// NOTE: /store is intentionally unauthenticated — a stored Shamir share is inert
+// until the bucket reaches quorum on chain, which /share checks independently. A
+// real deployment should still hand the browser a per-report capability token.
 app.post('/store', (req, res) => {
   const { bucketKeyHex, reportId, share } = req.body ?? {};
-  if (typeof bucketKeyHex !== 'string' || typeof reportId !== 'string' || typeof share !== 'string') {
+  if (
+    typeof bucketKeyHex !== 'string' || bucketKeyHex.length === 0 || bucketKeyHex.length > 128 ||
+    typeof reportId !== 'string' || reportId.length === 0 || reportId.length > 128 ||
+    typeof share !== 'string' || share.length === 0 || share.length > 8192
+  ) {
     return res.status(400).json({ error: 'BAD_INPUT' });
   }
   const s = load();

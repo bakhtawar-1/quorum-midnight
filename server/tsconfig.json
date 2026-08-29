@@ -1,0 +1,19 @@
+{
+  "// note": "Type-check only. The server bridges several loosely-typed Midnight SDKs, so noImplicitAny is relaxed here; the rest of strict stays on. Used by CI (npm run typecheck:server) and editors.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "noImplicitAny": false,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["**/*.ts", "../src/**/*.ts", "../scripts/**/*.ts"]
+}

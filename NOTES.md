@@ -433,3 +433,36 @@ http://localhost:5173 . Flow: step 1 spend a credential to enrol a reporter key 
 step 2 file with each key against the same person to cross the threshold ; on the escrow
 board, "Collect 2/3 shares & decrypt" — before quorum every node withholds; after, any 2
 of 3 reconstruct. Kill one escrow node and it still works (2-of-3).
+
+## Milestone 5 — hardening the demo services (no contract change)
+
+Bounded production-readiness pass on `server/`. No new dependencies — the extra
+HTTP concerns are ~120 lines of plain Express middleware.
+
+- `server/config.ts` — single place that reads every `QUORUM_*` / `NODE_ENV`
+  var. **Fail closed when `NODE_ENV=production`**: `QUORUM_ISSUER_SECRET`,
+  `QUORUM_PRIVATE_STATE_PASSWORD`, `QUORUM_API_TOKEN`, `QUORUM_CORS_ORIGIN`
+  (non-`*`) are then required or import throws before the port binds. Dev keeps
+  the old `quorum-demo-*` defaults + prints a one-line warning.
+- `server/http.ts` — `cors(origins)` explicit allow-list (replaces open
+  `cors()`), `securityHeaders`, `rateLimit` (fixed-window per-IP, in-memory —
+  single instance only), `requireToken` (bearer; no-op when unset),
+  `writeJsonAtomic` (tmp + rename), `isBase64(v, maxBytes)`.
+- `server/index.ts` — wired to both; `mutating = [rateLimit, requireToken]` on
+  `/api/enroll|report|reveal`; field caps (accusedLabel ≤200, keys ≤128) and
+  base64 validation on ciphertext/iv; `trust proxy` in prod; all `writeJson`
+  now atomic. `escrow-node.ts` — same headers/CORS/limit, `/store` size caps,
+  atomic save. `/store` left unauthenticated on purpose (a share is inert pre-
+  quorum; `/share` chain-checks) with a TODO for capability tokens.
+- `server/tsconfig.json` + `npm run typecheck` / `typecheck:server` — the server
+  was never type-checked before (root tsconfig is `src/**` only). `strict` on,
+  `noImplicitAny` off (the Midnight SDK surface is loosely typed).
+- `.github/workflows/ci.yml` — `api` job (npm ci + both typechecks), `ui` job
+  (npm ci + oxlint + `tsc -b && vite build`). e2e stays local (needs a devnet).
+- `.env.example`, `SECURITY.md` (the trust boundary), `docs/MIDNIGHT.md` (the
+  network/wallet reference lifted out of README), rewritten `README.md`.
+
+### G24 — WSL command exec intermittently `Wsl/Service/0x8007274c`
+On this box `wsl <cmd>` hangs for ~10–30 s at a time (Docker Desktop resource
+churn) then recovers. `\\wsl$\...` file IO is unaffected. Automation must retry
+the invocation, not just the inner command.

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Note: the full property e2e (`npm run quorum:e2e`) needs a live Midnight devnet
+# (node + indexer + proof server) and several minutes of proving. It is not run
+# here — run it locally against `docker compose up`. CI covers static checks only.
+
+jobs:
+  api:
+    name: api · typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck scaffold (src/)
+        run: npm run typecheck
+      - name: Typecheck server + scripts (advisory)
+        # Known baseline of ~13 pre-existing Uint8Array/SDK-generic errors in
+        # server/index.ts + scripts/quorum-e2e.ts. Visible here, not yet a gate —
+        # burn down, then drop continue-on-error.
+        continue-on-error: true
+        run: npm run typecheck:server
+
+  ui:
+    name: ui · lint + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

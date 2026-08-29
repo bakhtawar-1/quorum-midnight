@@ -22,7 +22,6 @@
  * that trust with Shamir secret-sharing.
  */
 import express from 'express';
-import cors from 'cors';
 import { createHash } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -41,27 +40,26 @@ import { persistentHash, CompactTypeVector, CompactTypeBytes } from '@midnight-n
 
 import { resolveNetwork, getOrCreateWallet } from '../src/network';
 import { createWallet, persistWalletState, unshieldedToken } from '../src/wallet';
+import { config } from './config';
+import { cors, securityHeaders, rateLimit, requireToken, writeJsonAtomic, isBase64 } from './http';
 
 // @ts-expect-error wallet sync needs a global WebSocket
 globalThis.WebSocket = WebSocket;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PORT = Number(process.env.QUORUM_API_PORT ?? 8787);
-const THRESHOLD = BigInt(process.env.QUORUM_THRESHOLD ?? '2');
+const PORT = config.api.port;
+const THRESHOLD = config.api.threshold;
 const CONTRACT_VERSION = 3;
-const IDENTITY_POOL = (process.env.QUORUM_IDENTITY_POOL ?? 'citizen-1,citizen-2,citizen-3')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean);
+const IDENTITY_POOL = config.api.identityPool;
 
 // Distributed escrow: k independent nodes each hold a Shamir share of every
 // report's AES key; any t reconstruct. Each node gates its own release on an
 // independent on-chain check. The browser splits and distributes shares — this
 // API never touches key material.
-const ESCROW_COUNT = Number(process.env.QUORUM_ESCROW_COUNT ?? 3);
-const ESCROW_THRESHOLD = Number(process.env.QUORUM_ESCROW_THRESHOLD ?? 2);
-const ESCROW_BASE_PORT = Number(process.env.QUORUM_ESCROW_BASE_PORT ?? 8801);
-const SPAWN_ESCROW = process.env.QUORUM_SPAWN_ESCROW !== '0';
+const ESCROW_COUNT = config.escrow.count;
+const ESCROW_THRESHOLD = config.escrow.threshold;
+const ESCROW_BASE_PORT = config.escrow.basePort;
+const SPAWN_ESCROW = config.escrow.spawn;
 const escrowNodes = Array.from({ length: ESCROW_COUNT }, (_, i) => ({
   index: i + 1,
   url: `http://localhost:${ESCROW_BASE_PORT + i}`,
@@ -95,7 +93,7 @@ const reporterSecretOf = (key: string): Uint8Array => sha256(key);
 const memberLeafOf = (key: string): Uint8Array => h2('quorum:member:v1', reporterSecretOf(key));
 
 const ORG_SALT = sha256('quorum:v1:org:demo');
-const ISSUER_SECRET = sha256(process.env.QUORUM_ISSUER_SECRET ?? 'quorum-demo-issuer-secret');
+const ISSUER_SECRET = sha256(config.api.issuerSecret);
 const ISSUER_COMMITMENT = h2('quorum:issuer:v1', ISSUER_SECRET);
 
 // ── local stores ─────────────────────────────────────────────────────────
@@ -122,7 +120,7 @@ const readJson = <T>(f: string, fallback: T): T => {
     return fallback;
   }
 };
-const writeJson = (f: string, v: unknown): void => fs.writeFileSync(f, JSON.stringify(v, null, 2));
+const writeJson = (f: string, v: unknown): void => writeJsonAtomic(f, v);
 
 // ── contract-call serialization ──────────────────────────────────────────
 let chain: Promise<unknown> = Promise.resolve();
@@ -284,7 +282,7 @@ async function bootstrap(): Promise<void> {
     privateStateProvider: levelPrivateStateProvider({
       privateStateStoreName: 'quorum-demo-state',
       accountId: walletCtx.unshieldedKeystore.getBech32Address().toString(),
-      privateStoragePasswordProvider: () => 'Local-Devnet-Development-Placeholder-1',
+      privateStoragePasswordProvider: () => config.api.privateStatePassword,
     }),
     publicDataProvider: indexerPublicDataProvider(networkConfig.indexer, networkConfig.indexerWS),
     zkConfigProvider,
@@ -391,8 +389,14 @@ async function poolStatus(): Promise<{ id: string; used: boolean }[]> {
 
 // ── HTTP ─────────────────────────────────────────────────────────────────
 const app = express();
-app.use(cors());
+app.disable('x-powered-by');
+app.set('trust proxy', config.isProd ? 1 : false);
+app.use(securityHeaders);
+app.use(cors(config.cors.origins));
 app.use(express.json({ limit: '256kb' }));
+
+// rate-limit + optional bearer-token gate on every state-changing endpoint
+const mutating = [rateLimit(config.rateLimit), requireToken(config.api.apiToken)];
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -452,14 +456,14 @@ app.get('/api/state', async (_req, res) => {
   }
 });
 
-app.post('/api/enroll', async (req, res) => {
+app.post('/api/enroll', mutating, async (req, res) => {
   if (boot.phase !== 'ready') return res.status(503).json({ error: 'BOOTING', boot });
   const { credentialId, reporterKey } = req.body ?? {};
   if (typeof credentialId !== 'string' || !IDENTITY_POOL.includes(credentialId)) {
     return res.status(400).json({ error: 'UNKNOWN_CREDENTIAL', message: 'Pick a credential from the pool.' });
   }
-  if (typeof reporterKey !== 'string' || !reporterKey.trim()) {
-    return res.status(400).json({ error: 'BAD_INPUT', message: 'reporterKey is required.' });
+  if (typeof reporterKey !== 'string' || !reporterKey.trim() || reporterKey.length > 128) {
+    return res.status(400).json({ error: 'BAD_INPUT', message: 'reporterKey is required (max 128 chars).' });
   }
   const key = reporterKey.trim();
   const secret = registrantSecretOf(credentialId);
@@ -500,15 +504,15 @@ app.post('/api/enroll', async (req, res) => {
   }
 });
 
-app.post('/api/report', async (req, res) => {
+app.post('/api/report', mutating, async (req, res) => {
   if (boot.phase !== 'ready') return res.status(503).json({ error: 'BOOTING', boot });
   const { accusedLabel, reporterSecret, ciphertext, iv } = req.body ?? {};
   if (
-    typeof accusedLabel !== 'string' || !accusedLabel.trim() ||
-    typeof reporterSecret !== 'string' || !reporterSecret.trim() ||
-    typeof ciphertext !== 'string' || typeof iv !== 'string'
+    typeof accusedLabel !== 'string' || !accusedLabel.trim() || accusedLabel.length > 200 ||
+    typeof reporterSecret !== 'string' || !reporterSecret.trim() || reporterSecret.length > 128 ||
+    !isBase64(ciphertext, 128 * 1024) || !isBase64(iv, 64)
   ) {
-    return res.status(400).json({ error: 'BAD_INPUT', message: 'accusedLabel, reporterSecret and an encrypted body are required.' });
+    return res.status(400).json({ error: 'BAD_INPUT', message: 'accusedLabel (max 200), reporterSecret (max 128) and a base64 ciphertext/iv are required.' });
   }
 
   const leaf = memberLeafOf(reporterSecret);
@@ -583,7 +587,7 @@ app.post('/api/report', async (req, res) => {
   }
 });
 
-app.post('/api/reveal', async (req, res) => {
+app.post('/api/reveal', mutating, async (req, res) => {
   if (boot.phase !== 'ready') return res.status(503).json({ error: 'BOOTING', boot });
   const { bucketKeyHex } = req.body ?? {};
   if (typeof bucketKeyHex !== 'string') return res.status(400).json({ error: 'BAD_INPUT' });

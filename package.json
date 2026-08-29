@@ -13,6 +13,8 @@
     "quorum:ui": "npm --prefix ui run dev",
     "quorum:web": "tsx server/index.ts & npm --prefix ui run dev",
     "build": "npx tsc --noEmit || true",
+    "typecheck": "tsc --noEmit",
+    "typecheck:server": "tsc -p server/tsconfig.json",
     "setup": "npx tsx src/setup.ts",
     "deploy": "npx tsx src/deploy.ts",
     "cli": "npx tsx src/cli.ts",
