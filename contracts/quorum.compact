@@ -1,0 +1,185 @@
+pragma language_version >= 0.23;
+
+import CompactStandardLibrary;
+
+// ---------------------------------------------------------------------------
+// Quorum -- allegation escrow.  MILESTONE 3 (identity-bound enrollment).
+//
+// A report stays in a hash-keyed "bucket" until `threshold` INDEPENDENT
+// reporters name the same person. "Independent" is now enforced by three
+// layers, all in zero knowledge:
+//
+//   A. NULLIFIER  (M1)
+//      nullifier = hash(reporterSecret, accusedID), single-use.
+//      -> one reporter key files against one person at most once.
+//
+//   B. MEMBERSHIP  (M2)
+//      submitReport proves the caller's reporter key is a leaf in `memberList`
+//      -- without revealing which leaf. A key that was never enrolled cannot
+//      file at all.
+//
+//   C. IDENTITY-BOUND ENROLLMENT  (this milestone)
+//      A key only gets into `memberList` via `enroll`, which requires a
+//      one-time IDENTITY CREDENTIAL: the caller proves their credential is a
+//      leaf in `identityList` (published by an issuer) AND spends a
+//      per-identity enroll-nullifier. So one issued identity -> one enrolled
+//      key -> one report per person. "N reporters" now means "N issued
+//      identities". `enroll` needs no admin; the only trusted act is the
+//      issuer registering one credential per real person.
+//
+// Residual trust: the issuer promising one credential per human. That is the
+// irreducible core of Sybil resistance; everything downstream of it is
+// cryptographic here.
+//
+// Still trusted off-chain: the report BODY key (escrowed by the demo service,
+// released at quorum). Shamir threshold sharing is the next milestone.
+// ---------------------------------------------------------------------------
+
+
+// === Ledger: the public, on-chain state ===================================
+
+// bucketKey -> number of distinct enrolled reporters who named that bucket.
+export ledger buckets: Map<Bytes<32>, Uint<64>>;
+
+// Spent report nullifiers (one per reporterKey+accused).
+export ledger nullifiers: Set<Bytes<32>>;
+
+// Corroborating reporters needed to unlock a bucket. Set once, at deploy.
+export ledger threshold: Uint<64>;
+
+// Enrolled reporter-key leaves (depth-10 tree, up to 1024). Historic: a new
+// enrollment does not invalidate a proof another reporter already built.
+export ledger memberList: HistoricMerkleTree<10, Bytes<32>>;
+
+// Registered identity-credential leaves, published by the issuer.
+export ledger identityList: HistoricMerkleTree<10, Bytes<32>>;
+
+// Spent enroll-nullifiers: one enrollment per identity, forever.
+export ledger enrollNullifiers: Set<Bytes<32>>;
+
+// hash("quorum:issuer:v1", issuerSecret). Whoever reproduces this may register
+// identity credentials. Set at deploy.
+export ledger issuerCommitment: Bytes<32>;
+
+constructor(initialThreshold: Uint<64>, initialIssuerCommitment: Bytes<32>) {
+  threshold = disclose(initialThreshold);
+  issuerCommitment = disclose(initialIssuerCommitment);
+}
+
+
+// === Private witnesses ===================================================
+
+// submitReport
+witness accusedID(): Bytes<32>;
+witness reporterSecret(): Bytes<32>;
+witness salt(): Bytes<32>;
+witness memberPath(): MerkleTreePath<10, Bytes<32>>;
+
+// registerIdentity (issuer)
+witness issuerSecret(): Bytes<32>;
+witness registrantSecret(): Bytes<32>;   // the person's credential secret being registered
+
+// enroll (permissionless, identity-gated)
+witness personSecret(): Bytes<32>;                    // the caller's issued credential
+witness identityPath(): MerkleTreePath<10, Bytes<32>>; // proves it is in identityList
+witness newReporterSecret(): Bytes<32>;              // the reporter key being enrolled
+
+
+// === registerIdentity ==================================================
+//
+// Issuer-only. Adds one identity-credential leaf. Returns the leaf so the
+// issuer service can index it for later path lookups.
+
+export circuit registerIdentity(): Bytes<32> {
+  assert(
+    persistentHash<Vector<2, Bytes<32>>>([pad(32, "quorum:issuer:v1"), issuerSecret()]) == issuerCommitment,
+    "Quorum: not the identity issuer");
+
+  const leaf: Bytes<32> = disclose(
+    persistentHash<Vector<2, Bytes<32>>>([pad(32, "quorum:id:v1"), registrantSecret()]));
+
+  identityList.insert(leaf);
+  return leaf;
+}
+
+
+// === enroll ============================================================
+//
+// Permissionless, but each issued identity can enroll exactly ONE reporter
+// key. Returns the reporter leaf added to memberList.
+
+export circuit enroll(): Bytes<32> {
+  const person: Bytes<32> = personSecret();
+
+  // 1. prove the caller holds a registered identity credential (hiding which)
+  const idLeaf: Bytes<32> =
+    persistentHash<Vector<2, Bytes<32>>>([pad(32, "quorum:id:v1"), person]);
+  const idProof: MerkleTreePath<10, Bytes<32>> = identityPath();
+  assert(idProof.leaf == idLeaf, "Quorum: identity path is not for your credential");
+  assert(
+    identityList.checkRoot(disclose(merkleTreePathRoot<10, Bytes<32>>(idProof))),
+    "Quorum: identity credential is not registered");
+
+  // 2. one enrollment per identity, ever
+  const enrollNull: Bytes<32> = disclose(
+    persistentHash<Vector<2, Bytes<32>>>([pad(32, "quorum:enroll-null:v1"), person]));
+  assert(!enrollNullifiers.member(enrollNull),
+    "Quorum: this identity has already enrolled a reporter key");
+  enrollNullifiers.insert(enrollNull);
+
+  // 3. add the reporter-key leaf to the member tree
+  const memberLeaf: Bytes<32> = disclose(
+    persistentHash<Vector<2, Bytes<32>>>([pad(32, "quorum:member:v1"), newReporterSecret()]));
+  memberList.insert(memberLeaf);
+  return memberLeaf;
+}
+
+
+// === submitReport ======================================================
+//
+// Returns [bucketKey, newCount] -- both public. Unchanged since M2: it proves
+// membership in `memberList`; layer C above just controls how leaves get there.
+
+export circuit submitReport(): [Bytes<32>, Uint<64>] {
+  const secret: Bytes<32> = reporterSecret();
+  const acc: Bytes<32> = accusedID();
+
+  // (0) MEMBERSHIP: prove `secret`'s leaf is in memberList, hiding which leaf.
+  const myLeaf: Bytes<32> =
+    persistentHash<Vector<2, Bytes<32>>>([pad(32, "quorum:member:v1"), secret]);
+  const proof: MerkleTreePath<10, Bytes<32>> = memberPath();
+  assert(proof.leaf == myLeaf, "Quorum: membership path is not for your key");
+  assert(
+    memberList.checkRoot(disclose(merkleTreePathRoot<10, Bytes<32>>(proof))),
+    "Quorum: you are not an enrolled reporter");
+
+  // (1) bucketKey == hash(accusedID, salt), computed here from the witnesses.
+  const bucketKey: Bytes<32> = disclose(
+    persistentHash<Vector<3, Bytes<32>>>([pad(32, "quorum:bucket:v1"), acc, salt()]));
+
+  // (2) nullifier == hash(reporterSecret, accusedID) and must be unused.
+  const nullifier: Bytes<32> = disclose(
+    persistentHash<Vector<3, Bytes<32>>>([pad(32, "quorum:nullifier:v1"), secret, acc]));
+  assert(!nullifiers.member(nullifier),
+    "Quorum: this reporter has already filed against this person");
+
+  // (3) spend the nullifier, bump the bucket count.
+  nullifiers.insert(nullifier);
+  const prior: Uint<64> =
+    buckets.member(bucketKey) ? buckets.lookup(bucketKey) : 0;
+  const newCount: Uint<64> = (prior + 1) as Uint<64>;
+  buckets.insert(bucketKey, newCount);
+
+  return [bucketKey, newCount];
+}
+
+
+// === isUnlocked ========================================================
+
+export circuit isUnlocked(bucketKey: Bytes<32>): Boolean {
+  const key: Bytes<32> = disclose(bucketKey);
+  if (!buckets.member(key)) {
+    return false;
+  }
+  return buckets.lookup(key) >= threshold;
+}
