@@ -20,8 +20,13 @@ cryptographically enforced and what is still trusted.
 
 - **The issuer.** Sybil resistance reduces to "the issuer registers one
   credential per real human." Everything downstream of that is cryptographic;
-  that step is not. In the demo the issuer is `server/index.ts` with a seeded
-  pool (`citizen-1..3`) and a shared secret.
+  that step is not. The issuer is `server/index.ts`, holding the issuer secret.
+  It gates issuance one of two ways: a seeded `citizen-*` pool (demo), or an
+  **email allowlist** — the operator lists emails they have verified as distinct
+  people, and each verified email can claim exactly one credential (single-use,
+  expiring link; one `.issued.json` record per email; credential secret is
+  random and spent immediately). The allowlist itself is still a human judgement
+  call, and the issuer secret still lives in the app process.
 - **The signing wallet.** The demo API signs with the local devnet genesis seed
   (`0x0…01`). Production must use a real wallet (e.g. Lace). **Never point the
   demo at a network that holds real value** — see `README.md`.

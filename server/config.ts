@@ -92,6 +92,23 @@ export const config = {
     max: numberEnv('QUORUM_RATELIMIT_MAX', 20),
   },
 
+  // Email-allowlist credential issuance. The magic link points at the UI's
+  // /claim route. Without QUORUM_SMTP_URL the link is logged to the API console
+  // (dev only — production requires the URL).
+  email: {
+    from: required('QUORUM_EMAIL_FROM', 'Quorum <no-reply@quorum.local>'),
+    smtpUrl: isProd ? required('QUORUM_SMTP_URL') : optional('QUORUM_SMTP_URL'),
+    uiBaseUrl: required('QUORUM_UI_BASE_URL', 'http://localhost:5173'),
+    magicTtlMs: numberEnv('QUORUM_MAGIC_TTL_MS', 30 * 60_000),
+  },
+
+  allowlist: {
+    /** path to a JSON array of allowed emails the issuer maintains */
+    file: optional('QUORUM_ALLOWLIST_FILE'),
+    /** comma-separated emails merged into the file on boot */
+    seed: listEnv('QUORUM_ALLOWLIST', []),
+  },
+
   escrow: {
     count: numberEnv('QUORUM_ESCROW_COUNT', 3),
     threshold: numberEnv('QUORUM_ESCROW_THRESHOLD', 2),
