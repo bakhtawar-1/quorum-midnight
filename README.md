@@ -108,6 +108,17 @@ Then open <http://localhost:5173>:
 | Indexer (GraphQL) | `8088` | `docker-compose.yml` |
 | Proof server | `6300` | `docker-compose.yml` |
 
+### Screenshots
+
+<!-- Drop the images into docs/screenshots/ with these exact filenames. -->
+
+| | |
+| --- | --- |
+| **1 · Claim a reporter credential** — verify email, pick a passphrase, credential minted + spent on chain | ![Claim a reporter credential](./docs/screenshots/01-claim.png) |
+| **2 · File a report** — body sealed in the browser; the "what actually leaves your device" panel shows the proof, bucket hash, nullifier, `+1` | ![File a report](./docs/screenshots/02-file.png) |
+| **3 · Escrow board — sealed** — a bucket below threshold; every share withheld | ![Escrow board, sealed bucket](./docs/screenshots/03-sealed.png) |
+| **4 · Escrow board — unlocked** — threshold reached, 2-of-3 shares collected, bodies decrypted locally | ![Escrow board, unlocked and revealed](./docs/screenshots/04-unlocked.png) |
+
 ---
 
 ## API reference

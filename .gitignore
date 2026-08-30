@@ -78,7 +78,7 @@ server/.issued.json
 .q-probe.sh
 
 # Claude Code scratch/helper scripts
-claude-*.sh
+claude-*
 run-api-claude.sh
 api-claude.log
 ui-claude.log
