@@ -114,10 +114,14 @@ Then open <http://localhost:5173>:
 
 | | |
 | --- | --- |
-| **1 · Claim a reporter credential** — verify email, pick a passphrase, credential minted + spent on chain | ![Claim a reporter credential](./docs/screenshots/01-claim.png) |
-| **2 · File a report** — body sealed in the browser; the "what actually leaves your device" panel shows the proof, bucket hash, nullifier, `+1` | ![File a report](./docs/screenshots/02-file.png) |
-| **3 · Escrow board — sealed** — a bucket below threshold; every share withheld | ![Escrow board, sealed bucket](./docs/screenshots/03-sealed.png) |
-| **4 · Escrow board — unlocked** — threshold reached, 2-of-3 shares collected, bodies decrypted locally | ![Escrow board, unlocked and revealed](./docs/screenshots/04-unlocked.png) |
+| **1 · Claim a reporter credential** — verify email, pick a passphrase, credential minted + spent on chain 
+<img width="1533" height="859" alt="image" src="https://github.com/user-attachments/assets/b94369a4-d9f1-4787-b2eb-92094a2a0466" />
+| **2 · File a report** — body sealed in the browser; the "what actually leaves your device" panel shows the proof, bucket hash, nullifier, `+1` 
+<img width="407" height="718" alt="image" src="https://github.com/user-attachments/assets/6ee67425-0354-483e-845e-60332d5efbcd" />
+| **3 · Escrow board — sealed** — a bucket below threshold; every share withheld
+<img width="1876" height="856" alt="Screenshot 2026-08-30 202944" src="https://github.com/user-attachments/assets/88f4ab30-b8eb-4515-9732-5ee87337ac13" />
+| **4 · Escrow board — unlocked** — threshold reached, 2-of-3 shares collected, bodies decrypted locally 
+<img width="1879" height="859" alt="image" src="https://github.com/user-attachments/assets/54e5517a-b14f-4e20-83bb-cf012032e914" />
 
 ---
 
