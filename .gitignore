@@ -76,3 +76,9 @@ server/.issued.json
 
 # Local probe/scratch
 .q-probe.sh
+
+# Claude Code scratch/helper scripts
+claude-*.sh
+run-api-claude.sh
+api-claude.log
+ui-claude.log
