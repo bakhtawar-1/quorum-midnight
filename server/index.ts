@@ -339,6 +339,14 @@ async function bootstrap(): Promise<void> {
     writeJson(DEPLOY_FILE, { address: contractAddress, threshold: THRESHOLD.toString(), v: CONTRACT_VERSION });
     writeJson(STORE_FILE, []);
     writeJson(MEMBERS_FILE, []);
+    // fresh contract → fresh issuance state (claim tokens + issued records)
+    for (const f of ['.magic.json', '.issued.json']) {
+      try {
+        fs.rmSync(path.join(HERE, f));
+      } catch {
+        /* not there */
+      }
+    }
     for (let i = 1; i <= ESCROW_COUNT; i++) {
       try {
         fs.rmSync(path.join(HERE, `.escrow-${i}.json`));

@@ -26,11 +26,37 @@ const BOOT_LABEL: Record<string, string> = {
   error: 'boot error',
 }
 
+type Theme = 'light' | 'dark'
+
+function initialTheme(): Theme {
+  try {
+    const saved = localStorage.getItem('quorum-theme')
+    if (saved === 'light' || saved === 'dark') return saved
+  } catch {
+    /* storage blocked — fall through */
+  }
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) {
+    return 'light'
+  }
+  return 'dark'
+}
+
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [state, setState] = useState<State | null>(null)
   const [stateErr, setStateErr] = useState('')
+  const [howOpen, setHowOpen] = useState(false)
   const pollRef = useRef<number | null>(null)
+
+  const [theme, setTheme] = useState<Theme>(initialTheme)
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try {
+      localStorage.setItem('quorum-theme', theme)
+    } catch {
+      /* storage blocked — the attribute still applies for this session */
+    }
+  }, [theme])
 
   // health: poll until ready
   useEffect(() => {
@@ -75,6 +101,10 @@ export default function App() {
   const ready = !!health?.ready
   const threshold = state?.threshold ?? health?.threshold ?? 2
   const memberCount = state?.memberCount ?? health?.memberCount ?? 0
+  const caseCount = state?.bucketCount ?? 0
+  const buckets = state?.buckets ?? []
+  const maxProgress = Math.min(threshold, Math.max(0, 0, ...buckets.map((b) => b.count)))
+  const anyUnlocked = buckets.some((b) => b.unlocked)
   const escrow = state?.escrow ??
     health?.escrow ?? {
       threshold: 2,
@@ -82,113 +112,296 @@ export default function App() {
       nodes: [1, 2, 3].map((i) => ({ index: i, url: `http://localhost:${8800 + i}` })),
     }
 
-  return (
-    <div className="app">
-      <header className="masthead">
-        <div className="brand">
-          <h1>Quorum</h1>
-          <span className="tag">allegation escrow</span>
-        </div>
-        <p className="pitch">
-          A report stays cryptographically unreadable until <strong>{threshold} independent reporters</strong> name
-          the same person — then every corroborating report opens at once. Nobody has to be the one who goes first
-          alone.
-        </p>
-      </header>
+  const openHow = () => {
+    setHowOpen(true)
+    setTimeout(() => document.getElementById('how')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40)
+  }
 
-      <div className="statusbar">
-        {!health && <Dot tone="warn" label={`connecting to API…`} />}
-        {health && !ready && (
-          <Dot tone="warn" label={BOOT_LABEL[health.boot.phase] ?? health.boot.phase} />
-        )}
-        {ready && <Dot tone="good" label="devnet connected" />}
-        {ready && (
-          <>
-            <Meta k="contract" v={`${health!.contractAddress.slice(0, 10)}…${health!.contractAddress.slice(-6)}`} />
-            <Meta k="threshold" v={String(threshold)} />
-            {state && <Meta k="identity slots" v={`${state.identitiesUsed}/${state.identityCount} used`} />}
-            <Meta k="enrolled reporters" v={String(memberCount)} />
-            <Meta k="escrow" v={`${escrow.threshold}-of-${escrow.nodes.length} nodes`} />
-            {state && <Meta k="nullifiers spent" v={String(state.nullifierCount)} />}
-            {state && <Meta k="people named" v={String(state.bucketCount)} />}
-          </>
-        )}
-        {health?.boot.phase === 'error' && (
-          <span className="boot-err">API boot failed: {health.boot.detail}</span>
-        )}
+  return (
+    <div className="app" id="top">
+      <div className="topbar">
+        <a className="logo" href="#top" aria-label="Quorum — home">
+          <Logo />
+          <span className="logo-word">Quorum</span>
+        </a>
+        <ThemeToggle theme={theme} onToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
       </div>
 
-      {!ready ? (
-        <div className="card gate">
-          <div className="spinner" />
-          <div>
-            <strong>Bringing up the local devnet stack.</strong>
-            <p>
-              {health
-                ? BOOT_LABEL[health.boot.phase] ?? health.boot.phase
-                : `Waiting for the Quorum API on :8787. Start it with `}
-              {!health && <code>npm run quorum:api</code>}
-            </p>
-            <p className="hint">
-              First run deploys the contract, funds fees, and has the issuer register the identity
-              pool — 2–3 min. Later runs rejoin instantly.
-            </p>
+      <section className="hero">
+        <div className="hero-copy">
+          <p className="eyebrow">Anonymous · corroborated · on-chain</p>
+          <h1 className="hero-title">Report what you can’t report alone.</h1>
+          <p className="hero-sub">
+            A report stays sealed until <strong>{threshold} independent people</strong> name the same person.
+            Then every corroborating account opens at once — and no one had to go first.
+          </p>
+          <div className="hero-actions">
+            <a className="btn btn-primary btn-lg" href="#start">
+              Get started
+            </a>
+            <button type="button" className="btn btn-ghost btn-lg" onClick={openHow}>
+              How it works
+            </button>
           </div>
+          <ConnStrip
+            health={health}
+            ready={ready}
+            threshold={threshold}
+            memberCount={memberCount}
+            caseCount={caseCount}
+          />
         </div>
-      ) : (
-        <main className="grid">
-          <div className="left">
-            {CLAIM_TOKEN ? (
-              <ClaimCredential
-                token={CLAIM_TOKEN}
-                onClaimed={() => {
-                  clearClaimParam()
-                  refresh()
-                }}
-              />
-            ) : (
-              <ClaimSlot
-                identities={state?.identities ?? []}
-                members={state?.members ?? []}
-                issuance={state?.issuance}
-                onClaimed={refresh}
-              />
-            )}
-            <FileReport
-              threshold={threshold}
-              members={state?.members ?? []}
-              escrow={escrow}
-              onChange={refresh}
-            />
-          </div>
-          <div className="right">
-            {stateErr && <div className="card err-card">Couldn’t read chain state: {stateErr}</div>}
-            <EscrowBoard buckets={state?.buckets ?? []} threshold={threshold} escrow={escrow} />
-          </div>
-        </main>
-      )}
+        <Gauge value={maxProgress} max={threshold} unlocked={anyUnlocked} />
+      </section>
 
-      <footer className="foot">
-        <p>
-          <strong>The trust model.</strong> Three ZK-enforced layers on chain: a report key files{' '}
-          <em>once per person</em> (nullifier); only <em>enrolled</em> keys file at all (membership proof, which
-          key stays hidden); and a key is only enrolled by spending a <em>one-time identity credential</em>
-          (identity proof + enroll-nullifier) — so one issued identity → one key → one report per person. The
-          report body is AES-GCM encrypted in your browser and its key is <em>Shamir-split</em> across{' '}
-          {escrow.nodes.length} escrow nodes ({escrow.threshold}-of-{escrow.nodes.length}); each node releases
-          its share only after its own on-chain quorum check, so no single party — this server included — can
-          open a report early. What still requires trust: the <strong>issuer</strong> registering one credential
-          per real human, and fewer than {escrow.threshold} of the {escrow.nodes.length} escrow nodes colluding.
-        </p>
-        <p className="hint">
-          Prefer the terminal? <code>npm run quorum:e2e</code> runs the whole security property — including the
-          Sybil attack failing — as a scripted walkthrough.
-        </p>
+      <HowItWorks open={howOpen} onToggle={() => setHowOpen((o) => !o)} escrowN={escrow.nodes.length} escrowT={escrow.threshold} />
+
+      <main className="flow" id="start">
+        <Stepper hasKey={memberCount > 0} hasCase={caseCount > 0} hasUnlock={anyUnlocked} />
+
+        {!ready ? (
+          <div className="card gate">
+            <div className="spinner" />
+            <div>
+              <strong>Bringing up the local devnet stack.</strong>
+              <p>
+                {health
+                  ? BOOT_LABEL[health.boot.phase] ?? health.boot.phase
+                  : 'Waiting for the Quorum API on :8787. Start it with '}
+                {!health && <code>npm run quorum:api</code>}
+              </p>
+              <p className="hint">
+                First run deploys the contract and funds fees — 2–3 min. Later runs rejoin instantly.
+              </p>
+              {health?.boot.phase === 'error' && (
+                <p className="boot-err">API boot failed: {health.boot.detail}</p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="grid">
+            <div className="col">
+              {CLAIM_TOKEN ? (
+                <ClaimCredential
+                  token={CLAIM_TOKEN}
+                  onClaimed={() => {
+                    clearClaimParam()
+                    refresh()
+                  }}
+                />
+              ) : (
+                <ClaimSlot
+                  identities={state?.identities ?? []}
+                  members={state?.members ?? []}
+                  issuance={state?.issuance}
+                  onClaimed={refresh}
+                />
+              )}
+              <FileReport
+                threshold={threshold}
+                members={state?.members ?? []}
+                escrow={escrow}
+                onChange={refresh}
+              />
+            </div>
+            <div className="col">
+              {stateErr && <div className="card err-card">Couldn’t read chain state: {stateErr}</div>}
+              <EscrowBoard buckets={buckets} threshold={threshold} escrow={escrow} />
+            </div>
+          </div>
+        )}
+      </main>
+
+      <footer className="site-foot">
+        <span>
+          Quorum — anonymous allegation escrow, built on{' '}
+          <a href="https://midnight.network" target="_blank" rel="noreferrer">
+            Midnight
+          </a>
+          .
+        </span>
+        <span className="foot-links">
+          <button type="button" className="linkish" onClick={openHow}>
+            How it works
+          </button>
+          <span className="dim">·</span>
+          <code>npm run quorum:e2e</code>
+          <span className="dim">·</span>
+          <span className="dim">Local devnet</span>
+        </span>
       </footer>
     </div>
   )
 }
 
+/* ── brand ──────────────────────────────────────────────────── */
+function Logo() {
+  return (
+    <svg className="logo-mark" viewBox="0 0 28 28" fill="none" aria-hidden="true">
+      <circle cx="10.6" cy="11" r="6.1" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="17.4" cy="11" r="6.1" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="14" cy="16.6" r="6.1" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="14" cy="12.9" r="2.1" fill="var(--accent)" />
+    </svg>
+  )
+}
+
+/* ── connection + key stats ─────────────────────────────────── */
+function ConnStrip({
+  health,
+  ready,
+  threshold,
+  memberCount,
+  caseCount,
+}: {
+  health: Health | null
+  ready: boolean
+  threshold: number
+  memberCount: number
+  caseCount: number
+}) {
+  return (
+    <div className="connstrip">
+      {!health && <Dot tone="warn" label="connecting to API…" />}
+      {health && !ready && <Dot tone="warn" label={BOOT_LABEL[health.boot.phase] ?? health.boot.phase} />}
+      {ready && (
+        <>
+          <Dot tone="good" label="connected" />
+          <Meta k="threshold" v={String(threshold)} />
+          <Meta k="reporters" v={String(memberCount)} />
+          <Meta k="cases" v={String(caseCount)} />
+          {health && <ContractChip address={health.contractAddress} />}
+        </>
+      )}
+    </div>
+  )
+}
+
+/* ── hero gauge ─────────────────────────────────────────────── */
+function Gauge({ value, max, unlocked }: { value: number; max: number; unlocked: boolean }) {
+  const r = 54
+  const circ = 2 * Math.PI * r
+  const pct = max > 0 ? Math.min(1, value / max) : 0
+  return (
+    <div className={`gauge${unlocked ? ' is-open' : ''}`} aria-hidden="true">
+      <svg viewBox="0 0 140 140">
+        <circle className="gauge-track" cx="70" cy="70" r={r} />
+        <circle
+          className="gauge-arc"
+          cx="70"
+          cy="70"
+          r={r}
+          strokeDasharray={circ}
+          strokeDashoffset={circ * (1 - pct)}
+          transform="rotate(-90 70 70)"
+        />
+      </svg>
+      <div className="gauge-face">
+        <span className="gauge-num">
+          {value}
+          <span className="gauge-den">/{max}</span>
+        </span>
+        <span className="gauge-cap">{unlocked ? 'a case is open' : 'to unlock a case'}</span>
+      </div>
+    </div>
+  )
+}
+
+/* ── stepper ────────────────────────────────────────────────── */
+function Stepper({
+  hasKey,
+  hasCase,
+  hasUnlock,
+}: {
+  hasKey: boolean
+  hasCase: boolean
+  hasUnlock: boolean
+}) {
+  const steps = [
+    { n: 1, label: 'Get a reporter key', done: hasKey },
+    { n: 2, label: 'File a report', done: hasCase },
+    { n: 3, label: 'Corroborate & reveal', done: hasUnlock },
+  ]
+  const activeIdx = steps.findIndex((s) => !s.done)
+  return (
+    <ol className="stepper">
+      {steps.map((s, i) => (
+        <li
+          key={s.n}
+          className={`${s.done ? 'done' : ''} ${i === activeIdx ? 'active' : ''}`.trim()}
+        >
+          <span className="step-dot">{s.done ? '✓' : s.n}</span>
+          <span className="step-label">{s.label}</span>
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+/* ── how it works (collapsible) ─────────────────────────────── */
+function HowItWorks({
+  open,
+  onToggle,
+  escrowN,
+  escrowT,
+}: {
+  open: boolean
+  onToggle: () => void
+  escrowN: number
+  escrowT: number
+}) {
+  return (
+    <section className={`how${open ? ' open' : ''}`} id="how">
+      <button type="button" className="how-head" onClick={onToggle} aria-expanded={open}>
+        <span>How it works</span>
+        <span className="how-chev" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div className="how-body">
+          <div className="how-grid">
+            <article>
+              <h3>
+                <span className="how-n">1</span> One person, one reporter
+              </h3>
+              <p>
+                You prove control of an allow-listed email once. That mints a single credential, spent
+                immediately to enrol a passphrase-only reporter key. Your email is never linked to the key.
+              </p>
+            </article>
+            <article>
+              <h3>
+                <span className="how-n">2</span> File without being identified
+              </h3>
+              <p>
+                Filing proves your key is one of the enrolled reporters — without revealing which one — and
+                burns a one-time marker, so a key counts once per person named.
+              </p>
+            </article>
+            <article>
+              <h3>
+                <span className="how-n">3</span> Opens only at quorum
+              </h3>
+              <p>
+                The report body is encrypted in your browser; its key is split across {escrowN} independent
+                holders ({escrowT}-of-{escrowN}). Each releases its share only after its own on-chain check
+                that enough reporters named the same person.
+              </p>
+            </article>
+          </div>
+          <p className="how-note">
+            Still trusted: whoever curates the email allow-list (one address per real person), and fewer than{' '}
+            {escrowT} of {escrowN} share-holders colluding. Everything else is enforced by the contract in
+            zero knowledge.
+          </p>
+        </div>
+      )}
+    </section>
+  )
+}
+
+/* ── small primitives ──────────────────────────────────────── */
 function Dot({ tone, label }: { tone: 'good' | 'warn' | 'bad'; label: string }) {
   return (
     <span className={`sdot ${tone}`}>
@@ -204,5 +417,49 @@ function Meta({ k, v }: { k: string; v: string }) {
       <span className="sk">{k}</span>
       <span className="sv mono">{v}</span>
     </span>
+  )
+}
+
+function ContractChip({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false)
+  const short = `${address.slice(0, 6)}…${address.slice(-4)}`
+  const copy = () => {
+    navigator.clipboard?.writeText(address).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+      },
+      () => {},
+    )
+  }
+  return (
+    <button type="button" className="smeta chip" onClick={copy} title="Copy contract address">
+      <span className="sk">contract</span>
+      <span className="sv mono">{copied ? 'copied' : short}</span>
+    </button>
+  )
+}
+
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const dark = theme === 'dark'
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={onToggle}
+      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={dark ? 'Light mode' : 'Dark mode'}
+    >
+      {dark ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      )}
+    </button>
   )
 }
