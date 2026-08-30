@@ -92,8 +92,9 @@ Two ways a reporter key gets enrolled:
   (`<ui>/?claim=<token>`; printed to the API console until `QUORUM_SMTP_URL` +
   `npm i nodemailer`), picks a reporter key, and the server mints a random
   32-byte credential and spends it to enrol — one per email, ever. The server
-  keeps no email → reporter-key link. `/api/request-credential` returns the same
-  response whether or not the address is on the list.
+  keeps no email → reporter-key link. `/api/request-credential` answers
+  `403 NOT_ALLOWED` when the address is not on the allowlist (so the list is
+  enumerable — an accepted trade for a closed, operator-run issuer).
 
 ## Production checklist
 

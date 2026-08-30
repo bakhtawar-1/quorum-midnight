@@ -99,7 +99,7 @@ export default function App() {
   }, [health?.ready, refresh])
 
   const ready = !!health?.ready
-  const threshold = state?.threshold ?? health?.threshold ?? 2
+  const threshold = state?.threshold ?? health?.threshold ?? 5
   const memberCount = state?.memberCount ?? health?.memberCount ?? 0
   const caseCount = state?.bucketCount ?? 0
   const buckets = state?.buckets ?? []

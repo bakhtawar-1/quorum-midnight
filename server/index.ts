@@ -580,15 +580,26 @@ app.post('/api/request-credential', emailLimiter, async (req, res) => {
   if (boot.phase !== 'ready') return res.status(503).json({ error: 'BOOTING', boot });
   const email = normalizeEmail((req.body ?? {}).email);
   if (!email) return res.status(400).json({ error: 'BAD_INPUT', message: 'A valid email address is required.' });
-  // Same answer whether or not the address is eligible — no allowlist enumeration.
-  const generic = { ok: true, message: 'If that address is eligible, a claim link is on its way.' };
+  // This endpoint reports whether the address is on the allowlist (403 if not).
+  // That makes the allowlist enumerable — an accepted trade for a closed,
+  // operator-run issuer where clear UX matters more. See SECURITY.md.
+  if (!isAllowed(email)) {
+    return res.status(403).json({
+      error: 'NOT_ALLOWED',
+      message: 'This email address is not authorised by the issuer. Ask the issuer to add it to the allowlist.',
+    });
+  }
+  if (hasCredential(email)) {
+    return res.status(409).json({
+      error: 'ALREADY_ISSUED',
+      message: 'A credential has already been issued for this address.',
+    });
+  }
   try {
-    if (isAllowed(email) && !hasCredential(email)) {
-      const token = createMagic(email);
-      const link = `${config.email.uiBaseUrl.replace(/\/+$/, '')}/?claim=${encodeURIComponent(token)}`;
-      await sendMagicLink(email, link);
-    }
-    res.json(generic);
+    const token = createMagic(email);
+    const link = `${config.email.uiBaseUrl.replace(/\/+$/, '')}/?claim=${encodeURIComponent(token)}`;
+    await sendMagicLink(email, link);
+    res.json({ ok: true, message: `A claim link is on its way to ${email}.` });
   } catch (err: any) {
     res.status(500).json({ error: 'REQUEST_FAILED', message: err?.message ?? String(err) });
   }

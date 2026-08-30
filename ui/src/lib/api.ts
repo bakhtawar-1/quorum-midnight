@@ -177,7 +177,8 @@ export const claimSlot = (input: { credentialId: string; reporterKey: string }) 
     body: JSON.stringify(input),
   })
 
-/** email-allowlist issuance: ask for a claim link (always returns the same message) */
+/** email-allowlist issuance: ask for a claim link. Rejects with NOT_ALLOWED when
+ *  the address isn't on the issuer's allowlist, ALREADY_ISSUED if it already claimed. */
 export const requestCredential = (email: string) =>
   req<{ ok: true; message: string }>('/api/request-credential', {
     method: 'POST',
