@@ -26,11 +26,36 @@ const BOOT_LABEL: Record<string, string> = {
   error: 'boot error',
 }
 
+type Theme = 'light' | 'dark'
+
+function initialTheme(): Theme {
+  try {
+    const saved = localStorage.getItem('quorum-theme')
+    if (saved === 'light' || saved === 'dark') return saved
+  } catch {
+    /* storage blocked — fall through */
+  }
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: light)').matches) {
+    return 'light'
+  }
+  return 'dark'
+}
+
 export default function App() {
   const [health, setHealth] = useState<Health | null>(null)
   const [state, setState] = useState<State | null>(null)
   const [stateErr, setStateErr] = useState('')
   const pollRef = useRef<number | null>(null)
+
+  const [theme, setTheme] = useState<Theme>(initialTheme)
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try {
+      localStorage.setItem('quorum-theme', theme)
+    } catch {
+      /* storage blocked — the attribute still applies for this session */
+    }
+  }, [theme])
 
   // health: poll until ready
   useEffect(() => {
@@ -85,9 +110,12 @@ export default function App() {
   return (
     <div className="app">
       <header className="masthead">
-        <div className="brand">
-          <h1>Quorum</h1>
-          <span className="tag">allegation escrow</span>
+        <div className="masthead-top">
+          <div className="brand">
+            <h1>Quorum</h1>
+            <span className="tag">allegation escrow</span>
+          </div>
+          <ThemeToggle theme={theme} onToggle={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))} />
         </div>
         <p className="pitch">
           A report stays cryptographically unreadable until <strong>{threshold} independent reporters</strong> name
@@ -204,5 +232,29 @@ function Meta({ k, v }: { k: string; v: string }) {
       <span className="sk">{k}</span>
       <span className="sv mono">{v}</span>
     </span>
+  )
+}
+
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const dark = theme === 'dark'
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={onToggle}
+      aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+      title={dark ? 'Light mode' : 'Dark mode'}
+    >
+      {dark ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      )}
+    </button>
   )
 }
