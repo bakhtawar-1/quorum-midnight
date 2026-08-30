@@ -255,6 +255,21 @@ code {
 .sv {
   color: var(--ink-dim);
 }
+button.smeta.chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  padding: 3px 10px;
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+button.smeta.chip:hover {
+  border-color: var(--ink-faint);
+}
+button.smeta.chip:hover .sv {
+  color: var(--ink);
+}
 .boot-err {
   color: var(--bad);
 }

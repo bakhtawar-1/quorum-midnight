@@ -129,16 +129,13 @@ export default function App() {
         {health && !ready && (
           <Dot tone="warn" label={BOOT_LABEL[health.boot.phase] ?? health.boot.phase} />
         )}
-        {ready && <Dot tone="good" label="devnet connected" />}
+        {ready && <Dot tone="good" label="connected" />}
         {ready && (
           <>
-            <Meta k="contract" v={`${health!.contractAddress.slice(0, 10)}…${health!.contractAddress.slice(-6)}`} />
-            <Meta k="threshold" v={String(threshold)} />
-            {state && <Meta k="identity slots" v={`${state.identitiesUsed}/${state.identityCount} used`} />}
-            <Meta k="enrolled reporters" v={String(memberCount)} />
-            <Meta k="escrow" v={`${escrow.threshold}-of-${escrow.nodes.length} nodes`} />
-            {state && <Meta k="nullifiers spent" v={String(state.nullifierCount)} />}
-            {state && <Meta k="people named" v={String(state.bucketCount)} />}
+            <Meta k="threshold" v={`${threshold} reporters`} />
+            <Meta k="enrolled" v={String(memberCount)} />
+            {state && <Meta k="cases" v={String(state.bucketCount)} />}
+            <ContractChip address={health!.contractAddress} />
           </>
         )}
         {health?.boot.phase === 'error' && (
@@ -232,6 +229,26 @@ function Meta({ k, v }: { k: string; v: string }) {
       <span className="sk">{k}</span>
       <span className="sv mono">{v}</span>
     </span>
+  )
+}
+
+function ContractChip({ address }: { address: string }) {
+  const [copied, setCopied] = useState(false)
+  const short = `${address.slice(0, 6)}…${address.slice(-4)}`
+  const copy = () => {
+    navigator.clipboard?.writeText(address).then(
+      () => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1200)
+      },
+      () => {},
+    )
+  }
+  return (
+    <button type="button" className="smeta chip" onClick={copy} title="Copy contract address">
+      <span className="sk">contract</span>
+      <span className="sv mono">{copied ? 'copied' : short}</span>
+    </button>
   )
 }
 
