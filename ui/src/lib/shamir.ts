@@ -7,11 +7,18 @@
 const EXP = new Uint8Array(512)
 const LOG = new Uint8Array(256)
 ;(() => {
+  // GF(2^8) log / antilog tables, AES reduction poly 0x11b. The generator MUST
+  // be 0x03: 0x02 is NOT primitive in this field (its multiplicative order is
+  // only 51), so a "multiply by 2" walk visits just 51 of the 255 non-zero
+  // elements and leaves LOG[] === 0 for the other 204 — silently corrupting
+  // every gmul/gdiv that touches them, and producing Shamir shares that don't
+  // lie on one polynomial (combine() then reconstructs the wrong secret).
+  const xtime = (n: number): number => ((n << 1) ^ (n & 0x80 ? 0x11b : 0)) & 0xff
   let x = 1
   for (let i = 0; i < 255; i++) {
     EXP[i] = x
     LOG[x] = i
-    x = (x << 1) ^ (x & 0x80 ? 0x11b : 0)
+    x ^= xtime(x) // x *= 0x03
   }
   for (let i = 255; i < 512; i++) EXP[i] = EXP[i - 255]
 })()
